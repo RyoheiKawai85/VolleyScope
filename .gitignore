@@ -216,3 +216,25 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# VolleyScope: Python environment
+.venv/
+__pycache__/
+*.pyc
+
+# VolleyScope: private and generated data
+data/raw/
+data/clips/
+data/frames/
+outputs/
+
+# VolleyScope: video files
+*.mp4
+*.mov
+*.avi
+*.mkv
+
+# VolleyScope: trained model files
+*.pt
+*.onnx
