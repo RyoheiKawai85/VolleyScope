@@ -238,3 +238,6 @@ outputs/
 # VolleyScope: trained model files
 *.pt
 *.onnx
+
+.venv-label-studio/
+data/annotations/*_pilot*/
