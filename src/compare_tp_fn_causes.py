@@ -207,7 +207,7 @@ def main() -> None:
             selected_factors
         )
 
-        row = {
+        row: dict[str, str | int] = {
             "image_name": image_name,
             "outcome": outcome,
             "selected_factors": ";".join(
