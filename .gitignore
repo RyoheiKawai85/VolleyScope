@@ -240,4 +240,7 @@ outputs/
 *.onnx
 
 .venv-label-studio/
+.venv-tracknet/
 data/annotations/*_pilot*/
+
+.venv-tracknet/

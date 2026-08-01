@@ -1,88 +1,115 @@
-# 次回作業：TrackNetV3導入可能性の調査
+# 次回作業：TrackNetV3の実動画最小推論
 
 ## 現在地
 
-最新コミットは`3498d24`。
+TrackNetV3の専用環境と公開重みを準備し、疑似入力によるGPU推論まで完了した。
 
-事前学習済みYOLO11nを入力サイズ1280で評価した。
+- GPU：NVIDIA GeForce GTX 1650、4GB
+- Python：3.12.13
+- PyTorch：2.7.1+cu118
+- 専用環境：`.venv-tracknet`
+- 公式コード確認コミット：`77c123a`
+- 公開`TrackNet_best.pt`：読み込み成功
+- 疑似入力：`(1, 27, 288, 512)`
+- 出力：`(1, 8, 288, 512)`
+- 初回推論：5.1127秒
+- ピーク割当VRAM：471.1MiB
 
-- TP：32
-- FN：72
-- Precision：0.914
-- Recall：0.308
-- F1：0.460
+この結果は、モデルと重みを現PCで実行できることを示す。バレーボール検出精度と動画処理速度は未確認である。
 
-104個の正解ボールは、1280入力換算ですべてCOCO形式のsmall基準に該当した。
+## 現在の停止地点
 
-小さい半分のRecallは9.6%、大きい半分は51.9%だった。
+既存の`data/clips/ball_challenge_001.mp4`はOneDrive配下にある。OpenCVによるメタデータ取得とローカル調査領域へのコピーがタイムアウトした。
 
-構造的遮蔽なしに限定しても、小さい半分は21.7%、大きい半分は61.4%だった。
+ユーザー側でWindowsエクスプローラーから次を行う。
 
-この結果から、最初に視認可能な小物体の基本検出性能を改善する。
+1. `VolleyScope/data/clips/ball_challenge_001.mp4`を右クリックする
+2. OneDriveの「このデバイス上で常に保持する」を選ぶ
+3. 緑色のチェックが表示され、ローカル保存が完了するまで待つ
 
-## モデル候補
+元動画を変更する操作ではなく、OneDriveからPCへ実体を保存する操作である。
 
-- バレーボールデータで追加学習したYOLO
-- 小物体向け検出ヘッド
-- TrackNetV2・TrackNetV3
-- SAHIは主軸ではなく比較候補
+## 次の実装
 
-TrackNetV3の追跡モジュールをYOLOの比較候補とし、軌道補完用InpaintNetは基本検出性能を確認した後に扱う。
+1. 動画のフレーム数、FPS、解像度、長さを確認する
+2. 数秒だけの評価用クリップを作る
+3. 公式コードを直接変更せず、VolleyScope側に最小推論ラッパーを作る
+4. `.cuda()`を`.to(device)`へ置き換える
+5. `torch.load`へ`map_location`と`weights_only=False`を明示する
+6. `batch_size=1`でTrackNet単体を実行する
+7. `Frame, Visibility, X, Y`のCSVを出力する
+8. 処理時間、ピークVRAM、目視結果、失敗条件を記録する
 
-## PC移行
+## 実動画最小推論の完了条件
 
-現在のPCにはNVIDIA GPUがなく、PyTorchはCPU版である。
+- 数秒動画の全フレームを処理できる
+- 出力CSVの行数とフレーム数が一致する
+- 座標を元解像度へ戻せる
+- 推論結果を重ねた確認動画を作れる
+- GPU使用量と処理時間を記録できる
+- バドミントン用重みをバレーボールへ直接適用した結果について、成功・失敗を区別して説明できる
 
-ゲーミングノートPCを主開発環境にする予定。最初に以下を確認する。
+## 解釈上の注意
 
-```powershell
-nvidia-smi
+公開重みの単一動画への適用結果だけで、YOLOとの優劣やTrackNetの採用を決めない。共通の連続フレーム正解データ、許容距離、Recall、Precision、中心点誤差、FPSを揃えて比較する。
 
-Get-CimInstance Win32_ComputerSystem |
-    Select-Object TotalPhysicalMemory
+現在の`evaluation_001`は学習へ使用しない。また静止画中心のため、TrackNet比較用の連続フレーム評価データは別に作る。
 
-Get-CimInstance Win32_VideoController |
-    Select-Object Name, AdapterRAM, DriverVersion
+# 次回作業：TrackNetV3の実動画入力設計
 
-Get-PSDrive C |
-    Select-Object Used, Free
+## 現在地
 
-git --version
+TrackNetV3専用環境、公開重み、疑似入力によるGPU推論の確認が完了した。
 
-py --list-paths
-```
+- プロジェクト：`C:\GitHub\VolleyScope`
+- GPU：NVIDIA GeForce GTX 1650、4GB
+- Python：3.12.10
+- PyTorch：2.7.1+cu118
+- 専用環境：`.venv-tracknet`
+- CUDA利用可能：`True`
+- 公開重みの疑似入力推論：成功
+- 入力shape：`(1, 27, 288, 512)`
+- 出力shape：`(1, 8, 288, 512)`
 
-## TrackNetV3調査項目
+`data/raw/match01.mp4`はOpenCVで正常に読み込めた。
 
-1. NVIDIA GPUとVRAM
-2. 公式リポジトリのライセンス
-3. 公開チェックポイント
-4. Python・PyTorch・CUDA依存関係
-5. Windowsでの実行可能性
-6. 公開重みからファインチューニングできるか
-7. `Frame, Visibility, X, Y`形式へのデータ変換
-8. YOLOとTrackNetで共通利用できる評価指標
-9. 現行PyTorchへの移植コスト
-10. 学習用連続フレームのアノテーション計画
+既存の`evaluation_001`は`data/clips/ball_challenge_002.mp4`から150枚をほぼ等間隔に抽出したデータである。画像名と`manifest.csv`から元動画のフレーム番号を追跡できる。
 
-## データ移行
+## 次に検証する仮説
 
-GitHubから取得できないものは別途移行する。
+アノテーション済みの評価フレームを基準に、元動画から周辺の連続8フレームを復元できる。
 
-- `data/raw/`
-- `data/clips/`
-- `data/frames/`
-- Git管理外のアノテーション
-- 必要な`outputs/`
+これが成立すれば、既存の正解ラベルを利用しながらTrackNetV3の時系列入力を構成できる。
 
-`.venv`はコピーせず、ゲーミングPCで再作成する。
+## 次回の作業順序
 
-現在の評価データは学習へ使用しない。
+1. ローカルにTrackNetV3公式コードと公開重みが存在するか確認する
+2. 公式の前処理、8フレーム入力、8枚の出力の対応関係を確認する
+3. `ball_challenge_002.mp4`の総フレーム数、FPS、解像度を確認する
+4. `manifest.csv`のフレーム番号と元動画を照合する
+5. 先頭・末尾フレームを含む8フレーム窓の扱いを設計する
+6. 1系列だけを読み出す最小コードをVS Codeで作成する
+7. 各フレームの番号、shape、読み込み成功を表示して検証する
+8. 公式前処理を適用し、TrackNetV3の実動画最小推論へ進む
 
-## ゲーミングPCでCodexへ送る開始指示
+## 設計上の注意
 
-GitHubからVolleyScopeをクローンした後、新しいCodexタスクで次の指示を送る。
+公式コードの全面統合は行わず、必要な推論部分だけをVolleyScope側へ小さく移植する。
 
-```text
-このVolleyScopeプロジェクトを継続します。AGENTS.mdとdocs/NEXT_SESSION.md、README.md、docs/DEVELOPMENT_PLAN.md、docs/EXPERIMENT_LOG.mdを読んで、TrackNetV3の導入可能性調査から再開してください。
-```
+YOLOとTrackNetV3の公平比較では、両モデルへ同じ動画から読み出したフレームを入力する。YOLOの矩形とTrackNetV3のヒートマップは、共通のボール中心座標へ変換して評価する。
+
+既存の`evaluation_001`は学習へ使用しない。
+
+## 次回の完了条件
+
+- 公式実装における入力と出力の時間対応を説明できる
+- 任意の評価対象について連続8フレームを読み出せる
+- 各フレームが元動画のどの番号か記録できる
+- 画像shapeと読み込み成否を確認できる
+- 境界フレームの扱いを明文化できる
+
+## 解釈上の注意
+
+連続8フレームを読み出せても、TrackNetV3の検出性能が確認できたことにはならない。
+
+公開重みを単一動画へ適用した結果だけで、YOLOとの優劣やTrackNetV3の最終採用を決定しない。
