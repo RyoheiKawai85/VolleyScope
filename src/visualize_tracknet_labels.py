@@ -1,3 +1,4 @@
+import argparse
 import csv
 from pathlib import Path
 
@@ -32,15 +33,46 @@ OUTPUT_DIR = (
 )
 
 
-def read_rows() -> list[dict[str, int]]:
+def parse_args() -> argparse.Namespace:
+    """可視化に使用する入出力パスを取得する。"""
+    parser = argparse.ArgumentParser(
+        description=(
+            "TrackNetV3用CSVの座標を"
+            "元画像へ重ねて確認画像を作成する"
+        ),
+    )
+    parser.add_argument(
+        "--image-dir",
+        type=Path,
+        default=IMAGE_DIR,
+        help="元画像フォルダ",
+    )
+    parser.add_argument(
+        "--tracknet-csv",
+        type=Path,
+        default=TRACKNET_CSV_PATH,
+        help="TrackNetV3用CSV",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=OUTPUT_DIR,
+        help="確認画像の出力先",
+    )
+    return parser.parse_args()
+
+
+def read_rows(
+    tracknet_csv_path: Path,
+) -> list[dict[str, int]]:
     """TrackNetV3用CSVを整数へ変換して読み込む。"""
-    if not TRACKNET_CSV_PATH.is_file():
+    if not tracknet_csv_path.is_file():
         raise FileNotFoundError(
             f"CSVが見つかりません: "
-            f"{TRACKNET_CSV_PATH}"
+            f"{tracknet_csv_path}"
         )
 
-    with TRACKNET_CSV_PATH.open(
+    with tracknet_csv_path.open(
         "r",
         newline="",
         encoding="utf-8-sig",
@@ -160,10 +192,16 @@ def draw_invisible_ball(
 
 def main() -> None:
     """CSV座標を画像へ重ねて確認画像を作成する。"""
-    if OUTPUT_DIR.exists():
+    args = parse_args()
+
+    image_dir = args.image_dir.resolve()
+    tracknet_csv_path = args.tracknet_csv.resolve()
+    output_dir = args.output_dir.resolve()
+
+    if output_dir.exists():
         existing_files = [
             path
-            for path in OUTPUT_DIR.rglob("*")
+            for path in output_dir.rglob("*")
             if path.is_file()
         ]
 
@@ -171,22 +209,22 @@ def main() -> None:
             raise FileExistsError(
                 "出力先に既存ファイルがあります。"
                 "上書きを防ぐため停止します: "
-                f"{OUTPUT_DIR}"
+                f"{output_dir}"
             )
 
-    OUTPUT_DIR.mkdir(
+    output_dir.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    rows = read_rows()
+    rows = read_rows(tracknet_csv_path)
     visible_count = 0
     invisible_count = 0
 
     for row in rows:
         frame_index = row["Frame"]
         image_path = (
-            IMAGE_DIR
+            image_dir
             / f"frame_{frame_index:06d}.png"
         )
         image = cv2.imread(str(image_path))
@@ -217,7 +255,7 @@ def main() -> None:
             invisible_count += 1
 
         output_path = (
-            OUTPUT_DIR / image_path.name
+            output_dir / image_path.name
         )
 
         if not cv2.imwrite(
@@ -244,7 +282,7 @@ def main() -> None:
     print(f"保存枚数: {len(rows)}")
     print(f"可視: {visible_count}")
     print(f"不可視: {invisible_count}")
-    print(f"出力先: {OUTPUT_DIR}")
+    print(f"出力先: {output_dir}")
 
 
 if __name__ == "__main__":
