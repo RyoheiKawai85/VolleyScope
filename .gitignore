@@ -227,6 +227,7 @@ __pycache__/
 data/raw/
 data/clips/
 data/frames/
+data/tracknet_official_pilot_v2/
 outputs/
 
 # VolleyScope: video files
