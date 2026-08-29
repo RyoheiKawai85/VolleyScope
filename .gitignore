@@ -241,6 +241,7 @@ outputs/
 *.onnx
 
 .venv-label-studio/
+.venv-yolo/
 .venv-tracknet/
 data/annotations/*_pilot*/
 

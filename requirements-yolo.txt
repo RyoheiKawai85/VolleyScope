@@ -1,0 +1,9 @@
+# YOLO comparison environment verified on Windows with a GTX 1650.
+# CUDA wheels are resolved from the official PyTorch package index.
+--extra-index-url https://download.pytorch.org/whl/cu118
+
+torch==2.7.1+cu118
+torchvision==0.22.1+cu118
+numpy==1.26.4
+opencv-python==4.10.0.84
+ultralytics==8.4.105
