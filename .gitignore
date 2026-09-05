@@ -244,5 +244,6 @@ outputs/
 .venv-yolo/
 .venv-tracknet/
 data/annotations/*_pilot*/
+data/annotations/external_evaluation_001_final/raw_export/
 
 .venv-tracknet/

@@ -65,10 +65,6 @@ EXPECTED_REFERENCE_COMMIT = (
     "77c123ad4dd449b7d275f16cc43f316ba5b54042"
 )
 
-EXPECTED_TEST_FRAME_COUNT = 150
-EXPECTED_POSITIVE_COUNT = 104
-EXPECTED_NEGATIVE_COUNT = 46
-
 HEATMAP_WIDTH = 512
 HEATMAP_HEIGHT = 288
 
@@ -429,7 +425,7 @@ def read_test_labels(
     label_dir: Path,
     video_metadata: dict[str, int | float],
 ) -> dict[int, dict[str, int | str]]:
-    """manifest順に150件のtest正解を作る。"""
+    """manifest順に疎なtest正解を作る。"""
     label_map = build_label_map(label_dir)
     test_labels = {}
 
@@ -488,31 +484,20 @@ def read_test_labels(
                 ),
             }
 
-    if len(test_labels) != EXPECTED_TEST_FRAME_COUNT:
-        raise ValueError(
-            "testラベル数が想定と一致しません: "
-            f"{len(test_labels)}"
-        )
-
-    positive_count = sum(
-        label["visibility"]
+    manifest_image_stems = {
+        Path(label["file_name"]).stem
         for label in test_labels.values()
-    )
-    negative_count = (
-        len(test_labels) - positive_count
+    }
+    unexpected_label_stems = sorted(
+        set(label_map) - manifest_image_stems
     )
 
-    if positive_count != EXPECTED_POSITIVE_COUNT:
+    if unexpected_label_stems:
         raise ValueError(
-            "test正例数が想定と一致しません: "
-            f"{positive_count}"
+            "manifestに存在しない余分なラベルがあります: "
+            f"{unexpected_label_stems}"
         )
 
-    if negative_count != EXPECTED_NEGATIVE_COUNT:
-        raise ValueError(
-            "test負例数が想定と一致しません: "
-            f"{negative_count}"
-        )
 
     frame_count = int(
         video_metadata["frame_count"]
@@ -631,7 +616,7 @@ def run_temporal_ensemble(
     max_sample_num: int,
     device: torch.device,
 ) -> dict[int, torch.Tensor]:
-    """公式weight仕様で150フレーム分だけ統合する。"""
+    """公式weight仕様でmanifest対象フレームだけ統合する。"""
     dataset = Video_IterableDataset(
         str(video_path),
         seq_len=sequence_length,
@@ -810,7 +795,7 @@ def evaluate_thresholds(
     get_metric,
     tolerance: float,
 ) -> tuple[list[dict], list[dict]]:
-    """各しきい値で150件を評価する。"""
+    """各しきい値でmanifest対象フレームを評価する。"""
     per_frame_rows = []
     summary_rows = []
 

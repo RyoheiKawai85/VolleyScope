@@ -91,7 +91,19 @@ def parse_args() -> argparse.Namespace:
         "--end-frame-exclusive",
         type=int,
         default=2985,
-        help="対象に含めない終了フレーム番号",
+        help=(
+            "対象に含めない終了フレーム番号。"
+            "--manifest指定時は使用しない"
+        ),
+    )
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=None,
+        help=(
+            "疎なフレームを処理するときのmanifest.csv。"
+            "frame_index列を処理対象として使用する"
+        ),
     )
 
     return parser.parse_args()
@@ -119,18 +131,24 @@ def validate_paths(
             f"{args.classes}"
         )
 
-    if args.start_frame < 0:
-        raise ValueError(
-            "--start-frameは0以上にしてください"
-        )
+    if args.manifest is None:
+        if args.start_frame < 0:
+            raise ValueError(
+                "--start-frameは0以上にしてください"
+            )
 
-    if (
-        args.end_frame_exclusive
-        <= args.start_frame
-    ):
-        raise ValueError(
-            "終了フレームは開始フレームより"
-            "大きくしてください"
+        if (
+            args.end_frame_exclusive
+            <= args.start_frame
+        ):
+            raise ValueError(
+                "終了フレームは開始フレームより"
+                "大きくしてください"
+            )
+    elif not args.manifest.is_file():
+        raise FileNotFoundError(
+            "manifest.csvが見つかりません: "
+            f"{args.manifest}"
         )
 
     if args.output_csv.exists():
@@ -160,6 +178,76 @@ def read_classes(
         )
 
     return classes
+
+
+def read_manifest_frame_indices(
+    manifest_path: Path,
+) -> list[int]:
+    """manifestから処理対象の疎なフレーム番号を読み込む。"""
+    with manifest_path.open(
+        "r",
+        newline="",
+        encoding="utf-8-sig",
+    ) as manifest_file:
+        reader = csv.DictReader(manifest_file)
+
+        if (
+            reader.fieldnames is None
+            or "frame_index" not in reader.fieldnames
+        ):
+            raise ValueError(
+                "manifestにframe_index列がありません: "
+                f"{manifest_path}"
+            )
+
+        frame_indices = []
+
+        for row_number, row in enumerate(
+            reader,
+            start=2,
+        ):
+            frame_index_text = row["frame_index"].strip()
+
+            if not frame_index_text:
+                raise ValueError(
+                    "manifestのframe_indexが空です: "
+                    f"行={row_number}"
+                )
+
+            try:
+                frame_index = int(frame_index_text)
+            except ValueError as error:
+                raise ValueError(
+                    "manifestのframe_indexが整数ではありません: "
+                    f"行={row_number}, "
+                    f"値={frame_index_text}"
+                ) from error
+
+            if frame_index < 0:
+                raise ValueError(
+                    "manifestのframe_indexが負数です: "
+                    f"行={row_number}, "
+                    f"値={frame_index}"
+                )
+
+            frame_indices.append(frame_index)
+
+    if not frame_indices:
+        raise RuntimeError(
+            f"manifestにデータ行がありません: {manifest_path}"
+        )
+
+    if len(set(frame_indices)) != len(frame_indices):
+        raise ValueError(
+            "manifestのframe_indexに重複があります"
+        )
+
+    if frame_indices != sorted(frame_indices):
+        raise ValueError(
+            "manifestのframe_indexが昇順ではありません"
+        )
+
+    return frame_indices
 
 
 def build_label_mapping(
@@ -369,12 +457,21 @@ def main() -> None:
     label_mapping = build_label_mapping(
         args.label_dir
     )
-    expected_frame_indices = list(
-        range(
-            args.start_frame,
-            args.end_frame_exclusive,
+    if args.manifest is None:
+        expected_frame_indices = list(
+            range(
+                args.start_frame,
+                args.end_frame_exclusive,
+            )
         )
-    )
+        input_mode = "continuous_range"
+    else:
+        expected_frame_indices = (
+            read_manifest_frame_indices(
+                args.manifest
+            )
+        )
+        input_mode = "manifest"
 
     unexpected_frames = sorted(
         set(label_mapping)
@@ -447,6 +544,7 @@ def main() -> None:
         "変換しました"
     )
     print(f"出力先: {args.output_csv}")
+    print(f"入力モード: {input_mode}")
     print(f"総フレーム数: {len(rows)}")
     print(f"ボールあり: {positive_count}")
     print(f"ボールなし: {negative_count}")
