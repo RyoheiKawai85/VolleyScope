@@ -50,11 +50,15 @@ def get_source_image_stem(label_path: Path) -> str | None:
     return match.group(1)
 
 
-def load_ground_truths() -> dict[str, list[float] | None]:
-    """各画像の正解枠を読み込む。負例画像にはNoneを設定する。"""
+def load_ground_truths(
+    label_dir: Path = LABEL_DIR,
+) -> dict[str, list[float] | None]:
+    """指定フォルダから正解枠を読み込む。負例にはNoneを設定する。"""
     ground_truths = {}
 
-    for label_path in sorted(LABEL_DIR.glob("*.txt")):
+    for label_path in sorted(
+        label_dir.glob("*.txt")
+    ):
         source_stem = get_source_image_stem(label_path)
 
         if source_stem is None:

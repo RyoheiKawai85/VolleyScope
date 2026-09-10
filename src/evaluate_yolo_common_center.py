@@ -13,6 +13,7 @@ from ultralytics import YOLO
 from convert_yolo_to_tracknet_csv import round_half_up
 from evaluate_pretrained_model import (
     IMAGE_DIR,
+    LABEL_DIR,
     SPORTS_BALL_CLASS_ID,
     calculate_iou,
     load_ground_truths,
@@ -21,6 +22,9 @@ from evaluate_pretrained_model import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+DEFAULT_IMAGE_DIR = IMAGE_DIR
+DEFAULT_LABEL_DIR = LABEL_DIR
 
 DEFAULT_WEIGHTS = (
     PROJECT_ROOT / "yolo11n.pt"
@@ -75,6 +79,19 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--image-dir",
+        type=Path,
+        default=DEFAULT_IMAGE_DIR,
+        help="YOLOへ入力する評価画像フォルダ",
+    )
+    parser.add_argument(
+        "--label-dir",
+        type=Path,
+        default=DEFAULT_LABEL_DIR,
+        help="Label Studioから出力したYOLO正解ラベル",
+    )
+
+    parser.add_argument(
         "--weights",
         type=Path,
         default=DEFAULT_WEIGHTS,
@@ -105,12 +122,28 @@ def calculate_sha256(path: Path) -> str:
 
 
 def validate_inputs(
+    image_dir: Path,
+    label_dir: Path,
     weights: Path,
     output_dir: Path,
-) -> tuple[Path, Path]:
-    """重み、画像、ラベル、出力先を検証する。"""
+) -> tuple[Path, Path, Path, Path]:
+    """画像、ラベル、重み、出力先を検証する。"""
+    image_dir = image_dir.resolve()
+    label_dir = label_dir.resolve()
     weights = weights.resolve()
     output_dir = output_dir.resolve()
+
+    if not image_dir.is_dir():
+        raise FileNotFoundError(
+            "評価画像フォルダがありません: "
+            f"{image_dir}"
+        )
+
+    if not label_dir.is_dir():
+        raise FileNotFoundError(
+            "正解ラベルフォルダがありません: "
+            f"{label_dir}"
+        )
 
     if not weights.is_file():
         raise FileNotFoundError(
@@ -126,19 +159,18 @@ def validate_inputs(
             f"{weight_hash}"
         )
 
-    if not IMAGE_DIR.is_dir():
-        raise FileNotFoundError(
-            f"評価画像フォルダがありません: "
-            f"{IMAGE_DIR}"
-        )
-
     if output_dir.exists():
         raise FileExistsError(
             "上書きを防ぐため停止します: "
             f"{output_dir}"
         )
 
-    return weights, output_dir
+    return (
+        image_dir,
+        label_dir,
+        weights,
+        output_dir,
+    )
 
 
 def normalized_center_to_heatmap(
@@ -256,6 +288,7 @@ def evaluate_experiment(
         list[float] | None,
     ],
     experiment: dict,
+    verify_historical_baseline: bool,
 ) -> tuple[dict, list[dict], list[dict]]:
     """1画像ずつ推論して2種類の基準で評価する。"""
     image_size = int(
@@ -604,14 +637,17 @@ def evaluate_experiment(
         center_counts["FN"],
     )
 
-    formal_reproduced = (
-        formal_counts["TP"]
-        == experiment["expected_tp"]
-        and formal_counts["FP"]
-        == experiment["expected_fp"]
-        and formal_counts["FN"]
-        == experiment["expected_fn"]
-    )
+    if verify_historical_baseline:
+        formal_reproduced = (
+            formal_counts["TP"]
+            == experiment["expected_tp"]
+            and formal_counts["FP"]
+            == experiment["expected_fp"]
+            and formal_counts["FN"]
+            == experiment["expected_fn"]
+        )
+    else:
+        formal_reproduced = None
 
     summary = {
         "experiment": experiment_name,
@@ -702,7 +738,14 @@ def write_csv(
 def main() -> None:
     """960・1280の正式指標と共通指標を評価する。"""
     args = parse_args()
-    weights, output_dir = validate_inputs(
+    (
+        image_dir,
+        label_dir,
+        weights,
+        output_dir,
+    ) = validate_inputs(
+        args.image_dir,
+        args.label_dir,
         args.weights,
         args.output_dir,
     )
@@ -712,21 +755,63 @@ def main() -> None:
             "CUDA GPUを利用できません"
         )
 
-    image_paths = sorted(
-        IMAGE_DIR.glob("*.jpg")
+    verify_historical_baseline = (
+        image_dir
+        == DEFAULT_IMAGE_DIR.resolve()
+        and label_dir
+        == DEFAULT_LABEL_DIR.resolve()
     )
-    ground_truths = load_ground_truths()
 
-    if len(image_paths) != EXPECTED_IMAGE_COUNT:
-        raise ValueError(
-            "評価画像数が想定と一致しません: "
-            f"{len(image_paths)}"
+    supported_image_extensions = {
+        ".jpg",
+        ".jpeg",
+        ".png",
+    }
+    image_paths = sorted(
+        image_path
+        for image_path in image_dir.iterdir()
+        if (
+            image_path.is_file()
+            and image_path.suffix.lower()
+            in supported_image_extensions
+        )
+    )
+
+    if not image_paths:
+        raise RuntimeError(
+            "評価画像が見つかりません: "
+            f"{image_dir}"
         )
 
-    if len(ground_truths) != EXPECTED_IMAGE_COUNT:
+    ground_truths = load_ground_truths(
+        label_dir
+    )
+
+    image_stems = {
+        image_path.stem
+        for image_path in image_paths
+    }
+    ground_truth_stems = set(
+        ground_truths
+    )
+
+    missing_label_stems = sorted(
+        image_stems - ground_truth_stems
+    )
+    unexpected_label_stems = sorted(
+        ground_truth_stems - image_stems
+    )
+
+    if missing_label_stems:
         raise ValueError(
-            "正解ラベル数が想定と一致しません: "
-            f"{len(ground_truths)}"
+            "正解ラベルがない評価画像があります: "
+            f"{missing_label_stems}"
+        )
+
+    if unexpected_label_stems:
+        raise ValueError(
+            "対応画像がない正解ラベルがあります: "
+            f"{unexpected_label_stems}"
         )
 
     positive_count = sum(
@@ -738,17 +823,33 @@ def main() -> None:
         len(ground_truths) - positive_count
     )
 
-    if positive_count != EXPECTED_POSITIVE_COUNT:
-        raise ValueError(
-            "正例数が想定と一致しません: "
-            f"{positive_count}"
-        )
+    if verify_historical_baseline:
+        if len(image_paths) != EXPECTED_IMAGE_COUNT:
+            raise ValueError(
+                "従来評価画像数が想定と"
+                "一致しません: "
+                f"{len(image_paths)}"
+            )
 
-    if negative_count != EXPECTED_NEGATIVE_COUNT:
-        raise ValueError(
-            "負例数が想定と一致しません: "
-            f"{negative_count}"
-        )
+        if (
+            positive_count
+            != EXPECTED_POSITIVE_COUNT
+        ):
+            raise ValueError(
+                "従来評価の正例数が想定と"
+                "一致しません: "
+                f"{positive_count}"
+            )
+
+        if (
+            negative_count
+            != EXPECTED_NEGATIVE_COUNT
+        ):
+            raise ValueError(
+                "従来評価の負例数が想定と"
+                "一致しません: "
+                f"{negative_count}"
+            )
 
     model = YOLO(str(weights))
     summaries = []
@@ -765,6 +866,7 @@ def main() -> None:
             image_paths,
             ground_truths,
             experiment,
+            verify_historical_baseline,
         )
 
         summaries.append(summary)
@@ -775,15 +877,29 @@ def main() -> None:
             prediction_rows
         )
 
+        reproduction_result = (
+            summary["formal_reproduced"]
+        )
+
+        if reproduction_result is None:
+            reproduction_text = "対象外"
+        else:
+            reproduction_text = str(
+                reproduction_result
+            )
+
         print(
             f"{summary['experiment']} "
             f"formal reproduced: "
-            f"{summary['formal_reproduced']}"
+            f"{reproduction_text}"
         )
 
-    if not all(
-        summary["formal_reproduced"]
-        for summary in summaries
+    if (
+        verify_historical_baseline
+        and not all(
+            summary["formal_reproduced"] is True
+            for summary in summaries
+        )
     ):
         raise RuntimeError(
             "既存IoU評価を再現できなかったため、"
@@ -821,6 +937,11 @@ def main() -> None:
             torch.cuda.is_available()
         ),
         "gpu": torch.cuda.get_device_name(0),
+        "image_dir": str(image_dir),
+        "label_dir": str(label_dir),
+        "historical_reproduction_check": (
+            verify_historical_baseline
+        ),
         "weights": str(weights),
         "weights_sha256": (
             calculate_sha256(weights)
