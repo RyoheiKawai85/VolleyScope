@@ -1,4 +1,4 @@
-# Byte-compiled / optimized / DLL files
+﻿# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
 *$py.class
@@ -246,4 +246,4 @@ outputs/
 data/annotations/*_pilot*/
 data/annotations/external_evaluation_001_final/raw_export/
 
-.venv-tracknet/
+data/yolo_pilot_v2/

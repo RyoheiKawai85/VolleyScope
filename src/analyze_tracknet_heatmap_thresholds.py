@@ -1,5 +1,6 @@
 import argparse
 import csv
+from email import parser
 import hashlib
 import json
 import math
@@ -65,6 +66,22 @@ EXPECTED_VALIDATION_FRAMES = 120
 EXPECTED_VISIBLE_FRAMES = 118
 EXPECTED_INVISIBLE_FRAMES = 2
 
+def parse_sha256(value: str) -> str:
+    """SHA-256を64桁の16進数として検証する。"""
+    normalized_value = value.strip().upper()
+
+    if (
+        len(normalized_value) != 64
+        or any(
+            character not in "0123456789ABCDEF"
+            for character in normalized_value
+        )
+    ):
+        raise argparse.ArgumentTypeError(
+            "SHA-256は64桁の16進数で指定してください"
+        )
+
+    return normalized_value
 
 def parse_thresholds(
     value: str,
@@ -109,9 +126,9 @@ def parse_args() -> argparse.Namespace:
     """ヒートマップ分析の実行条件を取得する。"""
     parser = argparse.ArgumentParser(
         description=(
-            "TrackNetV3 Epoch 3の生ヒートマップと"
-            "しきい値別分類を分析する"
-        ),
+    "TrackNetV3 checkpointの生ヒートマップと"
+    "しきい値別分類を分析する"
+),
     )
     parser.add_argument(
         "--dataset-root",
@@ -132,13 +149,22 @@ def parse_args() -> argparse.Namespace:
         help="固定したTrackNetV3公式実装",
     )
     parser.add_argument(
-        "--checkpoint",
-        type=Path,
-        default=DEFAULT_CHECKPOINT,
-        help="分析するEpoch 3 checkpoint",
-    )
+    "--checkpoint",
+    type=Path,
+    default=DEFAULT_CHECKPOINT,
+    help="分析するTrackNetV3 checkpoint",
+)
     parser.add_argument(
-        "--output-dir",
+    "--expected-checkpoint-sha256",
+    type=parse_sha256,
+    default=EXPECTED_CHECKPOINT_SHA256,
+    help=(
+        "分析対象checkpointに期待するSHA-256。"
+        "既定値は従来のEpoch 3"
+    ),
+)
+    parser.add_argument(
+    "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
         help="分析結果の新規出力先",
@@ -498,12 +524,15 @@ def main() -> None:
         args.checkpoint
     )
 
-    if checkpoint_hash != EXPECTED_CHECKPOINT_SHA256:
+    if (
+        checkpoint_hash
+        != args.expected_checkpoint_sha256
+        ):
         raise ValueError(
-            "checkpointのSHA-256が"
-            "期待値と一致しません: "
-            f"期待={EXPECTED_CHECKPOINT_SHA256}, "
-            f"実際={checkpoint_hash}"
+        "checkpointのSHA-256が"
+        "期待値と一致しません: "
+        f"期待={args.expected_checkpoint_sha256}, "
+        f"実際={checkpoint_hash}"
         )
 
     script_path = Path(
