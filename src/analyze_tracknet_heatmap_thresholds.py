@@ -1120,28 +1120,34 @@ def main() -> None:
         == OFFICIAL_THRESHOLD
     )
 
-    expected_official_counts = {
-        "TP": 38,
-        "TN": 1,
-        "FP1": 0,
-        "FP2": 1,
-        "FN": 80,
-    }
+    verify_historical_epoch3 = (
+        checkpoint_hash
+        == EXPECTED_CHECKPOINT_SHA256
+    )
 
-    for key, expected_value in (
-        expected_official_counts.items()
-    ):
-        if (
-            official_summary[key]
-            != expected_value
+    if verify_historical_epoch3:
+        expected_official_counts = {
+            "TP": 38,
+            "TN": 1,
+            "FP1": 0,
+            "FP2": 1,
+            "FN": 80,
+        }
+
+        for key, expected_value in (
+            expected_official_counts.items()
         ):
-            raise ValueError(
-                "公式しきい値0.5の結果を"
-                "再現できません: "
-                f"{key}="
-                f"{official_summary[key]}, "
-                f"期待={expected_value}"
-            )
+            if (
+                official_summary[key]
+                != expected_value
+            ):
+                raise ValueError(
+                    "公式しきい値0.5の結果を"
+                    "再現できません: "
+                    f"{key}="
+                    f"{official_summary[key]}, "
+                    f"期待={expected_value}"
+                )
 
     fn_rows = [
         row

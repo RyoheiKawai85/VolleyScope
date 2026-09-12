@@ -68,6 +68,48 @@ EXPERIMENTS = (
     },
 )
 
+def parse_sha256(value: str) -> str:
+    """SHA-256を64桁の16進数として検証する。"""
+    normalized_value = value.strip().upper()
+
+    if (
+        len(normalized_value) != 64
+        or any(
+            character not in "0123456789ABCDEF"
+            for character in normalized_value
+        )
+    ):
+        raise argparse.ArgumentTypeError(
+            "SHA-256は64桁の16進数で指定してください"
+        )
+
+    return normalized_value
+
+
+def parse_image_sizes(value: str) -> list[int]:
+    """カンマ区切りの画像サイズを検証する。"""
+    try:
+        image_sizes = [
+            int(part.strip())
+            for part in value.split(",")
+            if part.strip()
+        ]
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "画像サイズを整数へ変換できません"
+        ) from error
+
+    if not image_sizes:
+        raise argparse.ArgumentTypeError(
+            "画像サイズを1つ以上指定してください"
+        )
+
+    if any(image_size <= 0 for image_size in image_sizes):
+        raise argparse.ArgumentTypeError(
+            "画像サイズは正の整数にしてください"
+        )
+
+    return image_sizes
 
 def parse_args() -> argparse.Namespace:
     """共通中心距離評価の入出力を取得する。"""
@@ -95,7 +137,38 @@ def parse_args() -> argparse.Namespace:
         "--weights",
         type=Path,
         default=DEFAULT_WEIGHTS,
-        help="YOLO11nの重み",
+        help="評価するYOLO重み",
+    )
+    parser.add_argument(
+        "--expected-weights-sha256",
+        type=parse_sha256,
+        default=EXPECTED_WEIGHT_SHA256,
+        help=(
+            "評価対象の重みに期待するSHA-256。"
+            "既定値はCOCO事前学習済みYOLO11n"
+        ),
+    )
+    parser.add_argument(
+        "--confidence-threshold",
+        type=float,
+        default=CONFIDENCE_THRESHOLD,
+        help="推論時のconfidenceしきい値",
+    )
+    parser.add_argument(
+        "--image-sizes",
+        type=parse_image_sizes,
+        default=parse_image_sizes("960,1280"),
+        help="カンマ区切りの入力画像サイズ",
+    )
+    parser.add_argument(
+        "--class-id",
+        type=int,
+        default=SPORTS_BALL_CLASS_ID,
+        help=(
+            "検出対象のクラスID。"
+            "COCO sports ballは32、"
+            "追加学習済み単一ballモデルは0"
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -125,6 +198,7 @@ def validate_inputs(
     image_dir: Path,
     label_dir: Path,
     weights: Path,
+    expected_weights_sha256: str,
     output_dir: Path,
 ) -> tuple[Path, Path, Path, Path]:
     """画像、ラベル、重み、出力先を検証する。"""
@@ -152,11 +226,12 @@ def validate_inputs(
 
     weight_hash = calculate_sha256(weights)
 
-    if weight_hash != EXPECTED_WEIGHT_SHA256:
+    if weight_hash != expected_weights_sha256:
         raise RuntimeError(
             "YOLO重みのSHA-256が"
-            "固定値と異なります: "
-            f"{weight_hash}"
+            "期待値と異なります: "
+            f"期待={expected_weights_sha256}, "
+            f"実際={weight_hash}"
         )
 
     if output_dir.exists():
@@ -288,6 +363,8 @@ def evaluate_experiment(
         list[float] | None,
     ],
     experiment: dict,
+    confidence_threshold: float,
+    class_id: int,
     verify_historical_baseline: bool,
 ) -> tuple[dict, list[dict], list[dict]]:
     """1画像ずつ推論して2種類の基準で評価する。"""
@@ -324,14 +401,13 @@ def evaluate_experiment(
     ):
         results = model.predict(
             source=str(image_path),
-            conf=CONFIDENCE_THRESHOLD,
+            conf=confidence_threshold,
             imgsz=image_size,
-            classes=[SPORTS_BALL_CLASS_ID],
+            classes=[class_id],
             device=0,
             batch=1,
             verbose=False,
         )
-
         if len(results) != 1:
             raise RuntimeError(
                 "1画像に対するResult数が"
@@ -652,7 +728,7 @@ def evaluate_experiment(
     summary = {
         "experiment": experiment_name,
         "confidence_threshold": (
-            CONFIDENCE_THRESHOLD
+            confidence_threshold
         ),
         "image_size": image_size,
         "center_tolerance": (
@@ -747,6 +823,7 @@ def main() -> None:
         args.image_dir,
         args.label_dir,
         args.weights,
+        args.expected_weights_sha256,
         args.output_dir,
     )
 
@@ -754,13 +831,49 @@ def main() -> None:
         raise RuntimeError(
             "CUDA GPUを利用できません"
         )
+    if not 0 < args.confidence_threshold < 1:
+        raise ValueError(
+            "--confidence-thresholdは"
+            "0より大きく1より小さくしてください"
+        )
 
+    if args.class_id < 0:
+        raise ValueError(
+            "--class-idは0以上にしてください"
+        )
     verify_historical_baseline = (
         image_dir
         == DEFAULT_IMAGE_DIR.resolve()
         and label_dir
         == DEFAULT_LABEL_DIR.resolve()
+        and weights
+        == DEFAULT_WEIGHTS.resolve()
+        and args.expected_weights_sha256
+        == EXPECTED_WEIGHT_SHA256
+        and args.confidence_threshold
+        == CONFIDENCE_THRESHOLD
+        and args.class_id
+        == SPORTS_BALL_CLASS_ID
+        and args.image_sizes == [960, 1280]
     )
+
+    if verify_historical_baseline:
+        experiments = EXPERIMENTS
+    else:
+        confidence_label = (
+            f"{args.confidence_threshold:.2f}"
+            .replace(".", "")
+        )
+        experiments = tuple(
+            {
+                "name": (
+                    f"conf{confidence_label}_"
+                    f"img{image_size}"
+                ),
+                "image_size": image_size,
+            }
+            for image_size in args.image_sizes
+        )
 
     supported_image_extensions = {
         ".jpg",
@@ -856,7 +969,7 @@ def main() -> None:
     all_per_image_rows = []
     all_prediction_rows = []
 
-    for experiment in EXPERIMENTS:
+    for experiment in experiments:
         (
             summary,
             per_image_rows,
@@ -866,6 +979,8 @@ def main() -> None:
             image_paths,
             ground_truths,
             experiment,
+            args.confidence_threshold,
+            args.class_id,
             verify_historical_baseline,
         )
 
@@ -952,11 +1067,13 @@ def main() -> None:
         "image_count": len(image_paths),
         "positive_count": positive_count,
         "negative_count": negative_count,
-        "sports_ball_class_id": (
-            SPORTS_BALL_CLASS_ID
-        ),
+        "class_id": args.class_id,
         "confidence_threshold": (
-            CONFIDENCE_THRESHOLD
+            args.confidence_threshold
+        ),
+        "image_sizes": args.image_sizes,
+        "expected_weights_sha256": (
+            args.expected_weights_sha256
         ),
         "formal_iou_threshold": (
             IOU_THRESHOLD
