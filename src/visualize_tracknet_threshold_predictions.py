@@ -35,8 +35,6 @@ DEFAULT_OUTPUT_DIR = (
 
 HEATMAP_WIDTH = 512
 HEATMAP_HEIGHT = 288
-EXPECTED_FRAME_COUNT = 120
-
 GROUND_TRUTH_COLOR = (0, 255, 0)
 PREDICTION_COLOR = (0, 0, 255)
 RAW_PEAK_COLOR = (0, 165, 255)
@@ -159,6 +157,27 @@ def read_prediction_rows(
         encoding="utf-8-sig",
     ) as csv_file:
         reader = csv.DictReader(csv_file)
+        fieldnames = set(reader.fieldnames or [])
+
+        val_columns = {
+            "local_frame",
+            "source_frame",
+        }
+        test_columns = {
+            "frame_index",
+            "file_name",
+        }
+
+        if val_columns <= fieldnames:
+            input_mode = "validation"
+        elif test_columns <= fieldnames:
+            input_mode = "sparse_test"
+        else:
+            raise ValueError(
+                "予測CSVのフレーム識別列を判定できません。"
+                "val形式にはlocal_frameとsource_frame、"
+                "test形式にはframe_indexとfile_nameが必要です"
+            )
 
         for source_row in reader:
             row_threshold = float(
@@ -168,14 +187,28 @@ def read_prediction_rows(
             if abs(row_threshold - threshold) > 1e-9:
                 continue
 
+            if input_mode == "validation":
+                frame_order = int(
+                    source_row["local_frame"]
+                )
+                display_frame = int(
+                    source_row["source_frame"]
+                )
+                image_name = (
+                    f"frame_{display_frame:06d}.png"
+                )
+            else:
+                frame_order = int(
+                    source_row["frame_index"]
+                )
+                display_frame = frame_order
+                image_name = source_row["file_name"]
+
             rows.append(
                 {
-                    "local_frame": int(
-                        source_row["local_frame"]
-                    ),
-                    "source_frame": int(
-                        source_row["source_frame"]
-                    ),
+                    "frame_order": frame_order,
+                    "display_frame": display_frame,
+                    "image_name": image_name,
                     "ground_truth_visible": int(
                         source_row[
                             "ground_truth_visible"
@@ -228,7 +261,7 @@ def read_prediction_rows(
             )
 
     rows.sort(
-        key=lambda row: int(row["local_frame"])
+        key=lambda row: int(row["frame_order"])
     )
 
     return rows
@@ -237,36 +270,25 @@ def read_prediction_rows(
 def validate_rows(
     rows: list[dict[str, int | float | str]],
 ) -> None:
-    """対象件数、番号、分類内訳を検証する。"""
-    if len(rows) != EXPECTED_FRAME_COUNT:
+    """対象行の有無、番号、分類内訳を検証する。"""
+    if not rows:
         raise ValueError(
-            "対象フレーム数が想定と一致しません: "
-            f"{len(rows)}"
+            "指定したしきい値の予測行がありません"
         )
 
-    local_frames = [
-        int(row["local_frame"])
+    frame_orders = [
+        int(row["frame_order"])
         for row in rows
     ]
 
-    expected_local_frames = list(
-        range(EXPECTED_FRAME_COUNT)
-    )
-
-    if local_frames != expected_local_frames:
+    if len(set(frame_orders)) != len(frame_orders):
         raise ValueError(
-            "ローカルフレーム番号に"
-            "欠番または重複があります"
+            "フレーム番号が重複しています"
         )
 
-    source_frames = [
-        int(row["source_frame"])
-        for row in rows
-    ]
-
-    if len(set(source_frames)) != len(source_frames):
+    if frame_orders != sorted(frame_orders):
         raise ValueError(
-            "元フレーム番号が重複しています"
+            "フレーム番号が昇順ではありません"
         )
 
     valid_classifications = {
@@ -411,8 +433,8 @@ def draw_information_panel(
     )
 
     first_line = (
-        f"Source frame: {row['source_frame']}  "
-        f"Local frame: {row['local_frame']}  "
+        f"Frame: {row['display_frame']}  "
+        f"Image: {row['image_name']}  "
         f"Class: {classification}"
     )
     second_line = (
@@ -444,7 +466,7 @@ def draw_information_panel(
 
 
 def main() -> None:
-    """全120枚の確認画像とMP4を作成する。"""
+    """全対象画像の確認画像とMP4を作成する。"""
     args = parse_args()
     validate_args(args)
 
@@ -467,12 +489,9 @@ def main() -> None:
         exist_ok=False,
     )
 
-    first_source_frame = int(
-        rows[0]["source_frame"]
-    )
     first_image_path = (
         args.image_dir
-        / f"frame_{first_source_frame:06d}.png"
+        / str(rows[0]["image_name"])
     )
     first_image = cv2.imread(
         str(first_image_path)
@@ -490,7 +509,10 @@ def main() -> None:
 
     video_path = (
         args.output_dir
-        / "threshold_040_review.mp4"
+        / (
+            f"threshold_{int(round(args.threshold * 100)):03d}_"
+            "review.mp4"
+        )
     )
 
     fourcc = cv2.VideoWriter_fourcc(
@@ -524,12 +546,12 @@ def main() -> None:
 
     try:
         for row in rows:
-            source_frame = int(
-                row["source_frame"]
+            display_frame = int(
+                row["display_frame"]
             )
             image_path = (
                 args.image_dir
-                / f"frame_{source_frame:06d}.png"
+                / str(row["image_name"])
             )
             image = cv2.imread(
                 str(image_path)
@@ -648,7 +670,7 @@ def main() -> None:
             output_image_path = (
                 image_output_dir
                 / (
-                    f"frame_{source_frame:06d}_"
+                    f"frame_{display_frame:06d}_"
                     f"{classification}.png"
                 )
             )
