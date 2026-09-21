@@ -248,3 +248,6 @@ data/annotations/external_evaluation_001_final/raw_export/
 
 data/yolo_pilot_v2/
 data/annotations/external_evaluation_002_final/raw_export/
+
+data/annotations/tracknet_diverse_v1_final/raw_export/
+data/tracknet_official_diverse_v1/

@@ -1,5 +1,6 @@
 import argparse
 import csv
+import gc
 import hashlib
 import json
 import subprocess
@@ -46,17 +47,17 @@ EXPECTED_SEQUENCE_LENGTH = 8
 EXPECTED_BACKGROUND_MODE = "concat"
 EXPECTED_TOLERANCE = 4
 OFFICIAL_HEATMAP_THRESHOLD = 0.5
-EXPECTED_VALIDATION_VISIBLE_FRAMES = 118
-EXPECTED_VALIDATION_INVISIBLE_FRAMES = 2
+
 
 
 def parse_args() -> argparse.Namespace:
     """パイロット追加学習の実行条件を取得する。"""
     parser = argparse.ArgumentParser(
         description=(
-            "公開重みからTrackNetV3を"
-            "バレーボール用データで3 epoch追加学習する"
-        ),
+    "公開重みからTrackNetV3を"
+    "バレーボール用データで追加学習する"
+     ),
+
     )
     parser.add_argument(
         "--dataset-root",
@@ -379,11 +380,74 @@ def create_dataset_and_loader(
         shuffle=shuffle,
         num_workers=0,
         drop_last=False,
-        pin_memory=True,
+        pin_memory=False,
         generator=generator,
     )
 
     return dataset, data_loader
+
+def count_validation_visibility(
+    validation_dataset,
+    sequence_length: int,
+) -> tuple[int, int]:
+    """val Dataset内の可視・不可視フレーム数を数える。"""
+    if "vis" not in validation_dataset.data_dict:
+        raise KeyError(
+            "val Datasetにvis配列がありません"
+        )
+
+    visibility = np.asarray(
+        validation_dataset.data_dict["vis"]
+    )
+
+    expected_shape = (
+        len(validation_dataset),
+        sequence_length,
+    )
+
+    if visibility.shape != expected_shape:
+        raise ValueError(
+            "valのVisibility配列shapeが"
+            "期待値と一致しません: "
+            f"期待={expected_shape}, "
+            f"実際={visibility.shape}"
+        )
+
+    valid_mask = np.logical_or(
+        visibility == 0,
+        visibility == 1,
+    )
+
+    if not np.all(valid_mask):
+        invalid_values = np.unique(
+            visibility[
+                np.logical_not(valid_mask)
+            ]
+        ).tolist()
+
+        raise ValueError(
+            "valのVisibilityに0・1以外が"
+            "含まれています: "
+            f"{invalid_values}"
+        )
+
+    visible_count = int(
+        np.count_nonzero(visibility == 1)
+    )
+    invisible_count = int(
+        np.count_nonzero(visibility == 0)
+    )
+
+    if (
+        visible_count + invisible_count
+        != visibility.size
+    ):
+        raise RuntimeError(
+            "valの可視・不可視件数の合計が"
+            "全フレーム数と一致しません"
+        )
+
+    return visible_count, invisible_count
 
 def check_gradients_are_finite(
     model: torch.nn.Module,
@@ -446,7 +510,7 @@ def train_one_epoch(
             .float()
             .to(
                 device,
-                non_blocking=True,
+                non_blocking=False,
             )
         )
         target_heatmaps = (
@@ -454,7 +518,7 @@ def train_one_epoch(
             .float()
             .to(
                 device,
-                non_blocking=True,
+                non_blocking=False,
             )
         )
 
@@ -523,6 +587,13 @@ def train_one_epoch(
                 f"batch {batch_index}/{batch_count}, "
                 f"loss={loss.item():.8f}"
             )
+        del (
+            batch,
+            model_input,
+            target_heatmaps,
+            predictions,
+            loss,
+        )
 
     torch.cuda.synchronize()
 
@@ -566,6 +637,8 @@ def evaluate_validation(
     tolerance: int,
     verbose: bool,
     expected_frame_count: int,
+    expected_visible_frames: int,
+    expected_invisible_frames: int,
 ) -> dict:
     """公式評価関数でvalを評価する。"""
     evaluation_parameters = {
@@ -636,26 +709,24 @@ def evaluate_validation(
 
     if (
         visible_classification_total
-        != EXPECTED_VALIDATION_VISIBLE_FRAMES
+        != expected_visible_frames
     ):
         raise ValueError(
             "valのボールあり分類数が"
             "期待値と一致しません: "
             f"実際={visible_classification_total}, "
-            "期待="
-            f"{EXPECTED_VALIDATION_VISIBLE_FRAMES}"
+            f"期待={expected_visible_frames}"
         )
 
     if (
         invisible_classification_total
-        != EXPECTED_VALIDATION_INVISIBLE_FRAMES
+        != expected_invisible_frames
     ):
         raise ValueError(
             "valのボールなし分類数が"
             "期待値と一致しません: "
             f"実際={invisible_classification_total}, "
-            "期待="
-            f"{EXPECTED_VALIDATION_INVISIBLE_FRAMES}"
+            f"期待={expected_invisible_frames}"
         )
 
     return {
@@ -837,7 +908,7 @@ def print_validation_result(
 
 
 def main() -> None:
-    """公開重みから3 epoch追加学習する。"""
+    """公開重みからTrackNetV3を追加学習する。"""
     args = parse_args()
 
     args.dataset_root = (
@@ -971,6 +1042,14 @@ def main() -> None:
         bg_mode=background_mode,
     )
 
+    (
+        expected_validation_visible_frames,
+        expected_validation_invisible_frames,
+     ) = count_validation_visibility(
+        validation_dataset,
+        sequence_length,
+    )
+
     model = get_model(
         model_name,
         sequence_length,
@@ -1014,6 +1093,8 @@ def main() -> None:
                 volley_scope_commit
             ),
             "drop_last": False,
+        "pin_memory": False,
+        "non_blocking_transfer": False,
         }
     )
 
@@ -1031,7 +1112,7 @@ def main() -> None:
     configuration = {
         "schema_version": 1,
         "experiment_name": (
-            "tracknet_pilot_v2_transfer"
+            args.output_dir.name
         ),
         "volley_scope_commit": (
             volley_scope_commit
@@ -1078,6 +1159,8 @@ def main() -> None:
         "mixup_alpha": -1,
         "frame_mixup_alpha": -1,
         "drop_last": False,
+        "pin_memory": False,
+        "non_blocking_transfer": False,
         "dataset_refresh_policy": (
             "create a new Dataset before "
             "every train and validation pass"
@@ -1093,6 +1176,12 @@ def main() -> None:
         "expected_validation_frames": (
             len(validation_dataset)
             * sequence_length
+        ),
+        "expected_validation_visible_frames": (
+         expected_validation_visible_frames
+        ),
+        "expected_validation_invisible_frames": (
+         expected_validation_invisible_frames
         ),
         "torch_version": (
             torch.__version__
@@ -1123,7 +1212,7 @@ def main() -> None:
         args.output_dir / "history.csv"
     )
 
-    print("TrackNetV3パイロット追加学習を開始します")
+    print("TrackNetV3追加学習を開始します")
     print(f"GPU: {configuration['gpu']}")
     print(
         "VolleyScope commit: "
@@ -1158,6 +1247,16 @@ def main() -> None:
     print("mixup: 使用しない")
     print("scheduler: 使用しない")
     print("drop_last: False")
+    print("pin_memory: False")
+    print("non_blocking transfer: False")
+    print(
+    "val可視フレーム数: "
+    f"{expected_validation_visible_frames}"
+    )
+    print(
+    "val不可視フレーム数: "
+    f"{expected_validation_invisible_frames}"
+)
     print(
         "Dataset再生成: "
         "train・valの各走査前に実施"
@@ -1167,7 +1266,7 @@ def main() -> None:
         * sequence_length
     )
     (
-        _,
+        baseline_validation_dataset,
         baseline_validation_loader,
     ) = create_dataset_and_loader(
         dataset_class=dataset_class,
@@ -1187,9 +1286,15 @@ def main() -> None:
         tolerance,
         args.verbose_evaluation,
         expected_validation_frames,
+        expected_validation_visible_frames,
+        expected_validation_invisible_frames,
     )
 
     del baseline_validation_loader
+    del baseline_validation_dataset
+
+    gc.collect()
+    torch.cuda.empty_cache()
 
     print_validation_result(
         "学習前baseline",
@@ -1296,6 +1401,8 @@ def main() -> None:
             tolerance,
             args.verbose_evaluation,
             expected_validation_frames,
+            expected_validation_visible_frames,
+            expected_validation_invisible_frames,
         )
 
         if (

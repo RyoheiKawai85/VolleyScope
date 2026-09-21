@@ -1,0 +1,74 @@
+{
+  "dataset": "tracknet_diverse_v1",
+  "raw_export": "C:\\GitHub\\VolleyScope\\data\\annotations\\tracknet_diverse_v1_final\\raw_export\\label_studio_yolo_export.zip",
+  "raw_export_sha256": "2D2AD3D6A5956404629DC547D04DEAF73F2B1111E659427B4F6B7177755557C3",
+  "source_manifest": "C:\\GitHub\\VolleyScope\\data\\frames\\tracknet_diverse_v1\\manifest.csv",
+  "source_manifest_sha256": "31DD5066CC32E891D45BDEDB3E563EC9F6E4883B538FA2230854B04B4726F9DC",
+  "preparation_script": "C:\\GitHub\\VolleyScope\\src\\prepare_tracknet_diverse_labels.py",
+  "preparation_script_sha256": "BA7B30A2283B6AB27A722B2D0075945D140C06E4BC9AD81E4A59C3A464604692",
+  "total": 256,
+  "positive": 242,
+  "empty": 14,
+  "splits": {
+    "train": {
+      "total": 128,
+      "positive": 120,
+      "empty": 8
+    },
+    "val": {
+      "total": 128,
+      "positive": 122,
+      "empty": 6
+    }
+  },
+  "rallies": [
+    {
+      "split": "train",
+      "match_name": "match04",
+      "rally_id": 1,
+      "total": 64,
+      "positive": 56,
+      "empty": 8
+    },
+    {
+      "split": "train",
+      "match_name": "match04",
+      "rally_id": 2,
+      "total": 64,
+      "positive": 64,
+      "empty": 0
+    },
+    {
+      "split": "val",
+      "match_name": "match06",
+      "rally_id": 1,
+      "total": 32,
+      "positive": 32,
+      "empty": 0
+    },
+    {
+      "split": "val",
+      "match_name": "match06",
+      "rally_id": 2,
+      "total": 32,
+      "positive": 27,
+      "empty": 5
+    },
+    {
+      "split": "val",
+      "match_name": "match06",
+      "rally_id": 3,
+      "total": 32,
+      "positive": 31,
+      "empty": 1
+    },
+    {
+      "split": "val",
+      "match_name": "match06",
+      "rally_id": 4,
+      "total": 32,
+      "positive": 32,
+      "empty": 0
+    }
+  ]
+}
