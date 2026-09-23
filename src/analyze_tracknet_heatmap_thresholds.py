@@ -1,6 +1,5 @@
 import argparse
 import csv
-from email import parser
 import hashlib
 import json
 import math
@@ -11,7 +10,7 @@ from time import perf_counter
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -126,9 +125,9 @@ def parse_args() -> argparse.Namespace:
     """ヒートマップ分析の実行条件を取得する。"""
     parser = argparse.ArgumentParser(
         description=(
-    "TrackNetV3 checkpointの生ヒートマップと"
-    "しきい値別分類を分析する"
-),
+            "TrackNetV3 checkpointの生ヒートマップと"
+            "しきい値別分類を分析する"
+        ),
     )
     parser.add_argument(
         "--dataset-root",
@@ -149,22 +148,36 @@ def parse_args() -> argparse.Namespace:
         help="固定したTrackNetV3公式実装",
     )
     parser.add_argument(
-    "--checkpoint",
-    type=Path,
-    default=DEFAULT_CHECKPOINT,
-    help="分析するTrackNetV3 checkpoint",
-)
+        "--checkpoint",
+        type=Path,
+        default=DEFAULT_CHECKPOINT,
+        help="分析するTrackNetV3 checkpoint",
+    )
     parser.add_argument(
-    "--expected-checkpoint-sha256",
-    type=parse_sha256,
-    default=EXPECTED_CHECKPOINT_SHA256,
-    help=(
-        "分析対象checkpointに期待するSHA-256。"
-        "既定値は従来のEpoch 3"
-    ),
-)
+        "--expected-checkpoint-sha256",
+        type=parse_sha256,
+        default=EXPECTED_CHECKPOINT_SHA256,
+        help=(
+            "分析対象checkpointに期待するSHA-256。"
+            "既定値は従来のEpoch 3"
+        ),
+    )
     parser.add_argument(
-    "--output-dir",
+        "--validation-match",
+        choices=(
+            "all",
+            "match1",
+            "match2",
+        ),
+        default="all",
+        help=(
+            "分析するval環境。"
+            "allは全環境、match1は既存環境、"
+            "match2は新しいmatch06環境"
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
         help="分析結果の新規出力先",
@@ -310,8 +323,11 @@ def get_git_commit(
 
 def load_val_mapping(
     mapping_csv: Path,
-) -> dict[int, dict[str, str]]:
-    """valのローカル番号と元フレームを読み込む。"""
+) -> dict[
+    tuple[int, int, int],
+    dict[str, str],
+]:
+    """valのmatch・rally・フレーム対応を読み込む。"""
     mapping = {}
 
     with mapping_csv.open(
@@ -344,40 +360,414 @@ def load_val_mapping(
                 f"{reader.fieldnames}"
             )
 
+        has_official_match = (
+            "official_match"
+            in reader.fieldnames
+        )
+        has_official_rally = (
+            "official_rally"
+            in reader.fieldnames
+        )
+
+        if (
+            has_official_match
+            != has_official_rally
+        ):
+            raise ValueError(
+                "official_matchとofficial_rallyは"
+                "両方指定するか、両方省略してください"
+            )
+
+        has_official_identity = (
+            has_official_match
+            and has_official_rally
+        )
+
         for row in reader:
             if row["split"] != "val":
                 continue
+
+            if has_official_identity:
+                official_match = int(
+                    row["official_match"]
+                )
+                official_rally = int(
+                    row["official_rally"]
+                )
+            else:
+                official_match = 1
+                official_rally = 1
 
             local_frame = int(
                 row["local_frame"]
             )
 
-            if local_frame in mapping:
+            frame_key = (
+                official_match,
+                official_rally,
+                local_frame,
+            )
+
+            if frame_key in mapping:
                 raise ValueError(
                     "val対応表に重複があります: "
-                    f"{local_frame}"
+                    f"match={official_match}, "
+                    f"rally={official_rally}, "
+                    f"local_frame={local_frame}"
                 )
 
-            mapping[local_frame] = row
+            mapping[frame_key] = row
 
-    expected_keys = set(
-        range(EXPECTED_VALIDATION_FRAMES)
-    )
-
-    if set(mapping.keys()) != expected_keys:
-        missing = sorted(
-            expected_keys - set(mapping.keys())
-        )
-        extra = sorted(
-            set(mapping.keys()) - expected_keys
-        )
-
+    if not mapping:
         raise ValueError(
-            "val対応表の番号が不正です: "
-            f"missing={missing}, extra={extra}"
+            "val対応表が空です"
         )
 
     return mapping
+
+def parse_official_frame_key(
+    frame_file: str,
+) -> tuple[int, int, int]:
+    """公式Datasetの画像パスからフレーム識別子を得る。"""
+    frame_path = Path(
+        frame_file
+    )
+    path_parts = frame_path.parts
+
+    match_positions = [
+        index
+        for index, part in enumerate(path_parts)
+        if (
+            part.startswith("match")
+            and part[5:].isdigit()
+        )
+    ]
+
+    if len(match_positions) != 1:
+        raise ValueError(
+            "公式画像パスからmatchを"
+            "一意に取得できません: "
+            f"{frame_file}"
+        )
+
+    match_position = match_positions[0]
+
+    if (
+        match_position + 3
+        >= len(path_parts)
+    ):
+        raise ValueError(
+            "公式画像パスの階層が不足しています: "
+            f"{frame_file}"
+        )
+
+    if (
+        path_parts[match_position + 1]
+        != "frame"
+    ):
+        raise ValueError(
+            "match直下がframeではありません: "
+            f"{frame_file}"
+        )
+
+    match_text = path_parts[
+        match_position
+    ][5:]
+    rally_text = path_parts[
+        match_position + 2
+    ]
+    frame_text = Path(
+        path_parts[match_position + 3]
+    ).stem
+
+    if (
+        not rally_text.isdigit()
+        or not frame_text.isdigit()
+    ):
+        raise ValueError(
+            "rallyまたはframe番号を"
+            "整数へ変換できません: "
+            f"{frame_file}"
+        )
+
+    return (
+        int(match_text),
+        int(rally_text),
+        int(frame_text),
+    )
+
+
+def select_validation_sequences(
+    validation_dataset,
+    frame_mapping: dict[
+        tuple[int, int, int],
+        dict[str, str],
+    ],
+    validation_match: str,
+) -> tuple[
+    Subset,
+    dict[
+        tuple[int, int],
+        tuple[int, int, int],
+    ],
+    set[tuple[int, int, int]],
+    int,
+    int,
+]:
+    """指定環境のval系列とフレーム識別情報を選択する。"""
+    match_number_by_name = {
+        "all": None,
+        "match1": 1,
+        "match2": 2,
+    }
+
+    if (
+        validation_match
+        not in match_number_by_name
+    ):
+        raise ValueError(
+            "未対応のvalidation matchです: "
+            f"{validation_match}"
+        )
+
+    selected_match_number = (
+        match_number_by_name[
+            validation_match
+        ]
+    )
+
+    frame_file_array = np.asarray(
+        validation_dataset.data_dict[
+            "frame_file"
+        ]
+    )
+    frame_id_array = np.asarray(
+        validation_dataset.data_dict[
+            "id"
+        ]
+    )
+    visibility_array = np.asarray(
+        validation_dataset.data_dict[
+            "vis"
+        ]
+    )
+
+    if frame_file_array.ndim != 2:
+        raise ValueError(
+            "frame_fileの次元数が"
+            "2ではありません: "
+            f"{frame_file_array.shape}"
+        )
+
+    if (
+        frame_id_array.ndim != 3
+        or frame_id_array.shape[:2]
+        != frame_file_array.shape
+        or frame_id_array.shape[2] != 2
+    ):
+        raise ValueError(
+            "idの形状が想定外です: "
+            f"{frame_id_array.shape}"
+        )
+
+    if (
+        visibility_array.shape
+        != frame_file_array.shape
+    ):
+        raise ValueError(
+            "visの形状がframe_fileと"
+            "一致しません: "
+            f"frame_file={frame_file_array.shape}, "
+            f"vis={visibility_array.shape}"
+        )
+
+    if (
+        len(validation_dataset)
+        != frame_file_array.shape[0]
+    ):
+        raise ValueError(
+            "Dataset系列数とframe_file系列数が"
+            "一致しません"
+        )
+
+    selected_dataset_indices = []
+    data_id_to_frame_key = {}
+    selected_frame_keys = set()
+
+    for dataset_index in range(
+        len(validation_dataset)
+    ):
+        sequence_frame_keys = [
+            parse_official_frame_key(
+                str(
+                    frame_file_array[
+                        dataset_index,
+                        sequence_index,
+                    ]
+                )
+            )
+            for sequence_index in range(
+                frame_file_array.shape[1]
+            )
+        ]
+
+        sequence_matches = {
+            frame_key[0]
+            for frame_key
+            in sequence_frame_keys
+        }
+        sequence_rallies = {
+            frame_key[1]
+            for frame_key
+            in sequence_frame_keys
+        }
+
+        if len(sequence_matches) != 1:
+            raise ValueError(
+                "1系列に複数のmatchが"
+                "含まれています: "
+                f"dataset_index={dataset_index}, "
+                f"matches={sequence_matches}"
+            )
+
+        if len(sequence_rallies) != 1:
+            raise ValueError(
+                "1系列に複数のrallyが"
+                "含まれています: "
+                f"dataset_index={dataset_index}, "
+                f"rallies={sequence_rallies}"
+            )
+
+        sequence_match = next(
+            iter(sequence_matches)
+        )
+
+        if (
+            selected_match_number
+            is not None
+            and sequence_match
+            != selected_match_number
+        ):
+            continue
+
+        selected_dataset_indices.append(
+            dataset_index
+        )
+
+        for sequence_index, frame_key in enumerate(
+            sequence_frame_keys
+        ):
+            dataset_frame_id = (
+                int(
+                    frame_id_array[
+                        dataset_index,
+                        sequence_index,
+                        0,
+                    ]
+                ),
+                int(
+                    frame_id_array[
+                        dataset_index,
+                        sequence_index,
+                        1,
+                    ]
+                ),
+            )
+
+            if (
+                dataset_frame_id
+                in data_id_to_frame_key
+                and data_id_to_frame_key[
+                    dataset_frame_id
+                ]
+                != frame_key
+            ):
+                raise ValueError(
+                    "Dataset内IDが複数の"
+                    "公式フレームを指しています: "
+                    f"id={dataset_frame_id}"
+                )
+
+            if frame_key in selected_frame_keys:
+                raise ValueError(
+                    "選択したvalフレームが"
+                    "重複しています: "
+                    f"{frame_key}"
+                )
+
+            data_id_to_frame_key[
+                dataset_frame_id
+            ] = frame_key
+            selected_frame_keys.add(
+                frame_key
+            )
+
+    if not selected_dataset_indices:
+        raise ValueError(
+            "分析対象のval系列がありません: "
+            f"{validation_match}"
+        )
+
+    expected_mapping_keys = {
+        frame_key
+        for frame_key in frame_mapping
+        if (
+            selected_match_number is None
+            or frame_key[0]
+            == selected_match_number
+        )
+    }
+
+    if (
+        selected_frame_keys
+        != expected_mapping_keys
+    ):
+        missing_keys = sorted(
+            expected_mapping_keys
+            - selected_frame_keys
+        )
+        unexpected_keys = sorted(
+            selected_frame_keys
+            - expected_mapping_keys
+        )
+
+        raise ValueError(
+            "Datasetと対応表のフレームが"
+            "一致しません: "
+            f"missing={missing_keys}, "
+            f"unexpected={unexpected_keys}"
+        )
+
+    selected_visibility = (
+        visibility_array[
+            selected_dataset_indices
+        ]
+    )
+    visible_frame_count = int(
+        np.count_nonzero(
+            selected_visibility
+        )
+    )
+    total_frame_count = len(
+        selected_frame_keys
+    )
+    invisible_frame_count = (
+        total_frame_count
+        - visible_frame_count
+    )
+
+    validation_subset = Subset(
+        validation_dataset,
+        selected_dataset_indices,
+    )
+
+    return (
+        validation_subset,
+        data_id_to_frame_key,
+        selected_frame_keys,
+        visible_frame_count,
+        invisible_frame_count,
+    )
 
 
 def get_bbox_center(
@@ -602,7 +992,7 @@ def main() -> None:
             "座標許容距離が期待値と一致しません"
         )
 
-    validation_dataset = dataset_class(
+    full_validation_dataset = dataset_class(
         root_dir=str(args.dataset_root),
         split="val",
         seq_len=sequence_length,
@@ -611,14 +1001,24 @@ def main() -> None:
         bg_mode=background_mode,
     )
 
-    if (
-        len(validation_dataset)
-        != EXPECTED_VALIDATION_SEQUENCES
-    ):
-        raise ValueError(
-            "val系列数が期待値と一致しません: "
-            f"{len(validation_dataset)}"
-        )
+    (
+        validation_dataset,
+        data_id_to_frame_key,
+        expected_frame_keys,
+        visible_frame_count,
+        invisible_frame_count,
+    ) = select_validation_sequences(
+        full_validation_dataset,
+        frame_mapping,
+        args.validation_match,
+    )
+
+    validation_sequence_count = len(
+        validation_dataset
+    )
+    validation_frame_count = len(
+        expected_frame_keys
+    )
 
     validation_loader = DataLoader(
         validation_dataset,
@@ -628,6 +1028,8 @@ def main() -> None:
         drop_last=False,
         pin_memory=True,
     )
+
+
 
     model = get_model(
         model_name,
@@ -658,7 +1060,7 @@ def main() -> None:
         for threshold in args.thresholds
     }
 
-    processed_local_frames = set()
+    processed_frame_keys = set()
 
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
@@ -725,29 +1127,62 @@ def main() -> None:
                 for sequence_index in range(
                     sequence_length
                 ):
-                    local_frame = int(
-                        indices_array[
-                            batch_index,
-                            sequence_index,
-                            1,
-                        ]
+                    dataset_frame_id = (
+                        int(
+                            indices_array[
+                                batch_index,
+                                sequence_index,
+                                0,
+                            ]
+                        ),
+                        int(
+                            indices_array[
+                                batch_index,
+                                sequence_index,
+                                1,
+                            ]
+                        ),
                     )
 
                     if (
-                        local_frame
-                        in processed_local_frames
+                        dataset_frame_id
+                        not in data_id_to_frame_key
+                    ):
+                        raise ValueError(
+                            "Dataset内IDに対応する"
+                            "公式フレームがありません: "
+                            f"{dataset_frame_id}"
+                        )
+
+                    frame_key = (
+                        data_id_to_frame_key[
+                            dataset_frame_id
+                        ]
+                    )
+
+                    (
+                        official_match,
+                        official_rally,
+                        local_frame,
+                    ) = frame_key
+
+                    if (
+                        frame_key
+                        in processed_frame_keys
                     ):
                         raise ValueError(
                             "valフレームが重複しました: "
-                            f"{local_frame}"
+                            f"match={official_match}, "
+                            f"rally={official_rally}, "
+                            f"local_frame={local_frame}"
                         )
 
-                    processed_local_frames.add(
-                        local_frame
+                    processed_frame_keys.add(
+                        frame_key
                     )
 
                     mapping_row = frame_mapping[
-                        local_frame
+                        frame_key
                     ]
 
                     target_heatmap = (
@@ -853,6 +1288,12 @@ def main() -> None:
                                 "threshold": (
                                     threshold
                                 ),
+                                "official_match": (
+                                    official_match
+                                ),
+                                "official_rally": (
+                                    official_rally
+                                ),
                                 "local_frame": (
                                     local_frame
                                 ),
@@ -950,6 +1391,12 @@ def main() -> None:
 
                     frame_rows.append(
                         {
+                            "official_match": (
+                                official_match
+                            ),
+                            "official_rally": (
+                                official_rally
+                            ),
                             "local_frame": (
                                 local_frame
                             ),
@@ -1011,25 +1458,38 @@ def main() -> None:
         perf_counter() - start_time
     )
 
-    expected_local_frames = set(
-        range(EXPECTED_VALIDATION_FRAMES)
-    )
-
     if (
-        processed_local_frames
-        != expected_local_frames
+        processed_frame_keys
+        != expected_frame_keys
     ):
+        missing_frame_keys = sorted(
+            expected_frame_keys
+            - processed_frame_keys
+        )
+        unexpected_frame_keys = sorted(
+            processed_frame_keys
+            - expected_frame_keys
+        )
+
         raise ValueError(
             "処理したvalフレームに"
-            "欠落または余分があります"
+            "欠落または余分があります: "
+            f"missing={missing_frame_keys}, "
+            f"unexpected={unexpected_frame_keys}"
         )
 
     frame_rows.sort(
-        key=lambda row: row["local_frame"]
+        key=lambda row: (
+            row["official_match"],
+            row["official_rally"],
+            row["local_frame"],
+        )
     )
     threshold_rows.sort(
         key=lambda row: (
             row["threshold"],
+            row["official_match"],
+            row["official_rally"],
             row["local_frame"],
         )
     )
@@ -1042,19 +1502,34 @@ def main() -> None:
         len(frame_rows) - visible_count
     )
 
-    if visible_count != EXPECTED_VISIBLE_FRAMES:
+    if len(frame_rows) != validation_frame_count:
         raise ValueError(
-            "ボールありフレーム数が"
-            "期待値と一致しません: "
-            f"{visible_count}"
+            "フレーム行数が選択時の件数と"
+            "一致しません: "
+            f"期待={validation_frame_count}, "
+            f"実際={len(frame_rows)}"
         )
 
-    if invisible_count != EXPECTED_INVISIBLE_FRAMES:
+    if visible_count != visible_frame_count:
+        raise ValueError(
+            "ボールありフレーム数が"
+            "選択時の件数と一致しません: "
+            f"期待={visible_frame_count}, "
+            f"実際={visible_count}"
+        )
+
+    if (
+        invisible_count
+        != invisible_frame_count
+    ):
         raise ValueError(
             "ボールなしフレーム数が"
-            "期待値と一致しません: "
-            f"{invisible_count}"
+            "選択時の件数と一致しません: "
+            f"期待={invisible_frame_count}, "
+            f"実際={invisible_count}"
         )
+
+
 
     threshold_summary_rows = []
 
@@ -1067,12 +1542,14 @@ def main() -> None:
             counts.values()
         )
 
-        if total != EXPECTED_VALIDATION_FRAMES:
+        if total != validation_frame_count:
             raise ValueError(
                 "しきい値別分類数が"
-                "120ではありません: "
+                "選択したフレーム数と"
+                "一致しません: "
                 f"threshold={threshold}, "
-                f"total={total}"
+                f"期待={validation_frame_count}, "
+                f"実際={total}"
             )
 
         (
@@ -1123,6 +1600,23 @@ def main() -> None:
     verify_historical_epoch3 = (
         checkpoint_hash
         == EXPECTED_CHECKPOINT_SHA256
+        and args.dataset_root
+        == DEFAULT_DATASET_ROOT.resolve()
+        and args.mapping_csv
+        == DEFAULT_MAPPING_CSV.resolve()
+        and args.validation_match
+        in (
+            "all",
+            "match1",
+        )
+        and validation_sequence_count
+        == EXPECTED_VALIDATION_SEQUENCES
+        and validation_frame_count
+        == EXPECTED_VALIDATION_FRAMES
+        and visible_count
+        == EXPECTED_VISIBLE_FRAMES
+        and invisible_count
+        == EXPECTED_INVISIBLE_FRAMES
     )
 
     if verify_historical_epoch3:
@@ -1177,8 +1671,7 @@ def main() -> None:
     analysis_summary = {
         "schema_version": 1,
         "analysis_name": (
-            "tracknet_epoch_003_"
-            "val_threshold_analysis"
+            "tracknet_val_threshold_analysis"
         ),
         "volley_scope_commit": (
             volley_scope_commit
@@ -1201,11 +1694,32 @@ def main() -> None:
         "checkpoint_sha256": (
             checkpoint_hash
         ),
+        "expected_checkpoint_sha256": (
+            args.expected_checkpoint_sha256
+        ),
+        "historical_epoch3_reproduction_check": (
+            verify_historical_epoch3
+        ),
         "dataset_root": str(
             args.dataset_root
         ),
         "mapping_csv": str(
             args.mapping_csv
+        ),
+        "validation_match": (
+            args.validation_match
+        ),
+        "validation_sequences": (
+            validation_sequence_count
+        ),
+        "expected_frame_count": (
+            validation_frame_count
+        ),
+        "expected_visible_frames": (
+            visible_frame_count
+        ),
+        "expected_invisible_frames": (
+            invisible_frame_count
         ),
         "thresholds": (
             args.thresholds
@@ -1301,6 +1815,14 @@ def main() -> None:
         f"{script_hash}"
     )
     print(
+        "評価対象: "
+        f"{args.validation_match}"
+    )
+    print(
+        "評価系列数: "
+        f"{validation_sequence_count}"
+    )
+    print(
         "評価フレーム数: "
         f"{len(frame_rows)}"
     )
@@ -1323,6 +1845,7 @@ def main() -> None:
             "accuracy="
             f"{row['accuracy']:.4f}, "
             f"precision={row['precision']:.4f}, "
+            f"recall={row['recall']:.4f}, "
             f"f1={row['f1']:.4f}"
         )
 
