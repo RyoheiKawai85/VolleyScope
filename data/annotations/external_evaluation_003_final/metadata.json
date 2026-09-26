@@ -1,0 +1,28 @@
+﻿{
+    "source_zip_name":  "project-10-at-2026-09-27-02-53-8d6c79ef.zip",
+    "source_zip_sha256":  "7F20C8C9B7C52E8CF9936F43389A7C81BF4289DF160492A1145B06F0F6462C0A",
+    "original_count":  120,
+    "evaluation_count":  108,
+    "positive_count":  83,
+    "negative_count":  25,
+    "excluded_count":  12,
+    "excluded_task_numbers":  [
+                                  16,
+                                  17,
+                                  18,
+                                  19,
+                                  21,
+                                  78,
+                                  79,
+                                  80,
+                                  82,
+                                  115,
+                                  116,
+                                  119
+                              ],
+    "exclusion_reason":  "Human could infer that a ball was present from temporal context, but motion blur prevented a reliable per-frame center annotation.",
+    "model_selection_completed_before_test":  true,
+    "fixed_training_epoch":  7,
+    "fixed_threshold":  0.28,
+    "fixed_checkpoint_sha256":  "23ADAEAFC5B0159815B99F466904132BA9541E520CF09BAF9D0842E79C131CFE"
+}

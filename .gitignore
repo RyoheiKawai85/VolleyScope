@@ -1,4 +1,4 @@
-﻿# Byte-compiled / optimized / DLL files
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
 *$py.class
@@ -251,3 +251,4 @@ data/annotations/external_evaluation_002_final/raw_export/
 
 data/annotations/tracknet_diverse_v1_final/raw_export/
 data/tracknet_official_diverse_v1/
+data/annotations/external_evaluation_003_final/raw_export/
