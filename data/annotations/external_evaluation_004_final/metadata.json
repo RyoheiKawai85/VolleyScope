@@ -1,0 +1,22 @@
+{
+  "dataset_name": "external_evaluation_004_final",
+  "source_export_file": "project-12-at-2026-09-27-21-52-2fd95209.zip",
+  "source_export_sha256": "2ED8BD400A3179559C467D0B1A29745FC0F02409774F2E5B4C7BBD601B7A31E4",
+  "created_at_utc": "2026-09-27T12:58:05.591931+00:00",
+  "original_count": 120,
+  "evaluation_count": 120,
+  "positive_count": 103,
+  "negative_count": 17,
+  "excluded_count": 0,
+  "classes": [
+    "ball"
+  ],
+  "human_unresolvable_count": 0,
+  "evaluation_is_sealed": true,
+  "model_predictions_inspected": false,
+  "notes": [
+    "All empty labels were confirmed as true ball-out-of-frame negatives.",
+    "No human-unresolvable frame was reported before model evaluation.",
+    "Do not use this dataset for checkpoint or threshold selection."
+  ]
+}
