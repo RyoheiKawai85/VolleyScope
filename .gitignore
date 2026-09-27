@@ -254,3 +254,5 @@ data/tracknet_official_diverse_v1/
 data/annotations/external_evaluation_003_final/raw_export/
 
 data/annotations/external_evaluation_004_final/raw_export/
+
+data/yolo_diverse_v1/

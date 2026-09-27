@@ -41,13 +41,17 @@ EXPERIMENTS = [
 
 
 def get_source_image_stem(label_path: Path) -> str | None:
-    """Label Studioの接頭辞を除き、元画像名を取得する。"""
-    match = re.search(r"(frame_\d{6})$", label_path.stem)
+    """Label Studioの接頭辞だけを除き、元画像名を取得する。"""
+    label_stem = label_path.stem
+    label_studio_match = re.fullmatch(
+        r"[0-9a-fA-F]{8}-(.+)",
+        label_stem,
+    )
 
-    if match is None:
-        return None
+    if label_studio_match is not None:
+        return label_studio_match.group(1)
 
-    return match.group(1)
+    return label_stem
 
 
 def load_ground_truths(

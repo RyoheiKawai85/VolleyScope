@@ -1386,3 +1386,24 @@ match05はサントリー対ペルージャの試合で、VNLのmatch03・match0
 7. 変更後は新しい未使用testで確認する
 
 現段階ではYOLOとの統合を優先しない。第三外部testでYOLOだけが成功したのは1枚であり、理想的な統合でもF1改善は約0.0117に留まったためである。
+### YOLO多様化モデルの固定と第四外部test
+
+YOLO11nを既存pilot＋match04で学習し、既存pilot＋match06のvalだけで条件を固定した。
+
+固定YOLO11n：
+
+- checkpoint：Epoch 6の`epoch5.pt`
+- SHA-256：`C99C1C5D0D2EAFA04533DED473D844A0E70D4F798F4910E1983B6233FF354A06`
+- confidence：0.15
+- imgsz：1280
+- class ID：0
+
+固定TrackNetV3：
+
+- checkpoint：多様化学習Epoch 7
+- SHA-256：`23ADAEAFC5B0159815B99F466904132BA9541E520CF09BAF9D0842E79C131CFE`
+- threshold：0.28
+
+次は未使用match08から作成した第四外部testへ、両モデルを一度だけ適用する。第四外部testを見てcheckpointやしきい値を再選定しない。
+
+確認項目は、共通中心距離基準、モデル間補完関係、第三外部testとの画質差、人物・客席・UIへの誤反応の再現性とする。
